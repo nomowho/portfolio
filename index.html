@@ -405,6 +405,7 @@ async function refreshPrices(){
   });
 
   let twUpdated=0,twFailed=0,usUpdated=0,usFailed=0;
+  const failedNames=[];
 
   // ── TW stocks: one batch request via TWSE ──
   setStatus("loading","更新台股中…");
@@ -413,7 +414,7 @@ async function refreshPrices(){
     twStocks=twStocks.map(s=>{
       const p=priceMap[s.ticker];
       if(p&&p>0){twUpdated++;return{...s,currentPrice:p};}
-      twFailed++;return s;
+      twFailed++;failedNames.push(s.name);return s;
     });
   }catch(e){
     console.log("TW batch failed:",e.message);
@@ -429,7 +430,7 @@ async function refreshPrices(){
       const p=await fetchFinnhub(s.ticker);
       usStocks[i]={...s,currentPrice:p};
       usUpdated++;
-    }catch{usFailed++;}
+    }catch{usFailed++;failedNames.push(s.name);}
     if(i<usStocks.length-1)await new Promise(r=>setTimeout(r,120));
   }
 
@@ -443,8 +444,9 @@ async function refreshPrices(){
     setStatus("ok",`✓ 全部 ${total} 檔更新完成（台${twUpdated} 美${usUpdated}）`,now);
     showToast(`✓ ${total} 檔即時股價更新完成`);
   }else if(total>0){
-    setStatus("warn",`已更新 ${total} 檔，${failed} 檔失敗（台-${twFailed} 美-${usFailed}）`,now);
-    showToast(`⚠ 更新 ${total} 檔，${failed} 檔失敗`,"#ffcc55");
+    const failStr=failedNames.join("、");
+    setStatus("warn",`已更新 ${total} 檔，失敗：${failStr}`,now);
+    showToast(`⚠ ${failed} 檔未更新：${failStr}`,"#ffcc55");
   }else{
     setStatus("err","全部失敗，請確認網路連線");
     showToast("✕ 無法取得報價","#ff6060");
