@@ -208,7 +208,7 @@ const SEED_TW=[
   {name:"泓德能源",ticker:"6592",shares:1000,avgPrice:96.08,currentPrice:90.00,market:"TW"},
   {name:"國泰A級科技債",ticker:"00952B",shares:1000,avgPrice:32.33,currentPrice:28.92,market:"TW"},
   {name:"大華美國MAG7+",ticker:"00971",shares:2000,avgPrice:9.85,currentPrice:10.27,market:"TW"},
-  {name:"錦明",ticker:"9958",shares:1000,avgPrice:57.55,currentPrice:42.80,market:"TW"},
+  {name:"錦明",ticker:"3230",shares:1000,avgPrice:57.55,currentPrice:42.80,market:"TW"},
   {name:"富邦科技",ticker:"0052",shares:1000,avgPrice:41.00,currentPrice:49.20,market:"TW"},
   {name:"富邦台50",ticker:"006208",shares:1000,avgPrice:110.00,currentPrice:196.00,market:"TW"},
   {name:"元大美債20年",ticker:"00679B",shares:5000,avgPrice:25.00,currentPrice:27.04,market:"TW"},
@@ -327,19 +327,31 @@ async function fetchAllTWPrices(stocks){
   // Mark each stock as tse or otc based on ticker prefix rules:
   // OTC (上櫃): 4xxx, 6xxx, 8xxx ranges + known ETFs on OTC
   // Everything else: TSE (上市)
+  // Explicit exchange mapping — tse=上市, otc=上櫃
+  const EX_MAP={
+    "0050":"tse","00878":"tse","00881":"tse","00919":"tse","00929":"tse",
+    "00941":"tse","00669":"tse","1101":"tse","1210":"tse","1301":"tse",
+    "1326":"tse","2002":"tse","2303":"tse","2317":"tse","2330":"tse",
+    "2359":"tse","2801":"tse","2882":"tse","2887":"tse","3231":"tse",
+    "5871":"tse","0052":"tse","006208":"tse","00679B":"tse","2882":"tse",
+    // OTC 上櫃
+    "4105":"otc","4126":"otc","4138":"otc","6592":"otc","6770":"otc",
+    "9958":"tse","3230":"tse","00885":"otc","00971":"otc","00522":"otc",
+    // Bond ETFs with B — TSE
+    "00952B":"tse",
+    // Special: 中信NASDAQ 00669 → TSE, but check
+    "00669":"tse",
+  };
   function getExchange(ticker){
-    const n=parseInt(ticker);
-    if(ticker.startsWith("006")||ticker.startsWith("00")){
-      // Most ETFs are TSE; a few are OTC — default tse
-      return"tse";
-    }
-    if((n>=4000&&n<=4999)||(n>=5000&&n<=5999&&n!==5871)||(n>=6000&&n<=6999)||
-       (n>=8000&&n<=8999))return"otc";
-    return"tse";
+    return EX_MAP[ticker]||"tse";
   }
 
-  const query=stocks.map(s=>`${getExchange(s.ticker)}_${s.ticker}.tw`).join("|");
-  const twseUrl=`https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=${encodeURIComponent(query)}&json=1&delay=0`;
+  // Query both tse AND otc for all stocks — TWSE will return data for whichever is correct
+  const allCodes=stocks.map(s=>s.ticker);
+  const tseQuery=allCodes.map(c=>`tse_${c}.tw`).join("|");
+  const otcQuery=allCodes.map(c=>`otc_${c}.tw`).join("|");
+  const combinedQuery=tseQuery+"|"+otcQuery;
+  const twseUrl=`https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=${encodeURIComponent(combinedQuery)}&json=1&delay=0`;
 
   const proxies=[
     `https://corsproxy.io/?${encodeURIComponent(twseUrl)}`,
