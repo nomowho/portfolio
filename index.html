@@ -311,35 +311,59 @@ function setStatus(state,msg,time){
 
 // ── Price Fetchers ────────────────────────────────────────────────────────────
 
-// US: Finnhub (no CORS issues, browser-friendly)
+// US: Finnhub
 async function fetchFinnhub(symbol){
   const url=`https://finnhub.io/api/v1/quote?symbol=${symbol}&token=${FINNHUB_KEY}`;
   const r=await fetch(url,{signal:AbortSignal.timeout(8000)});
   if(!r.ok)throw new Error("finnhub "+r.status);
   const d=await r.json();
-  // c = current price, pc = previous close
-  const price=d.c||d.pc;
+  const price=d.c>0?d.c:d.pc;
   if(!price||price<=0)throw new Error("no price");
   return price;
 }
 
-// TW: TWSE batch API via allorigins proxy (fetches all TW stocks in ONE request)
-async function fetchAllTWPrices(stockCodes){
-  // Build query string: tse_2330.tw|tse_0050.tw|...
-  const query=stockCodes.map(c=>`tse_${c}.tw`).join("|");
-  const twseUrl=`https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=${encodeURIComponent(query)}&json=1&delay=0`;
-  const proxyUrl=`https://api.allorigins.win/raw?url=${encodeURIComponent(twseUrl)}`;
-  const r=await fetch(proxyUrl,{signal:AbortSignal.timeout(12000)});
-  if(!r.ok)throw new Error("twse proxy "+r.status);
-  const d=await r.json();
-  const items=d?.msgArray||[];
-  const map={};
-  for(const item of items){
-    const code=item.c; // stock code
-    const price=parseFloat(item.z!=="-"?item.z:item.y); // z=current, y=prev close
-    if(code&&!isNaN(price)&&price>0)map[code]=price;
+// TW: TWSE batch — try multiple proxies in sequence
+async function fetchAllTWPrices(stocks){
+  // Mark each stock as tse or otc based on ticker prefix rules:
+  // OTC (上櫃): 4xxx, 6xxx, 8xxx ranges + known ETFs on OTC
+  // Everything else: TSE (上市)
+  function getExchange(ticker){
+    const n=parseInt(ticker);
+    if(ticker.startsWith("006")||ticker.startsWith("00")){
+      // Most ETFs are TSE; a few are OTC — default tse
+      return"tse";
+    }
+    if((n>=4000&&n<=4999)||(n>=5000&&n<=5999&&n!==5871)||(n>=6000&&n<=6999)||
+       (n>=8000&&n<=8999))return"otc";
+    return"tse";
   }
-  return map;
+
+  const query=stocks.map(s=>`${getExchange(s.ticker)}_${s.ticker}.tw`).join("|");
+  const twseUrl=`https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=${encodeURIComponent(query)}&json=1&delay=0`;
+
+  const proxies=[
+    `https://corsproxy.io/?${encodeURIComponent(twseUrl)}`,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(twseUrl)}`,
+    `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(twseUrl)}`,
+  ];
+
+  for(const proxyUrl of proxies){
+    try{
+      const r=await fetch(proxyUrl,{signal:AbortSignal.timeout(10000)});
+      if(!r.ok)continue;
+      const d=await r.json();
+      const items=d?.msgArray||[];
+      if(!items.length)continue;
+      const map={};
+      for(const item of items){
+        const code=item.c;
+        const price=parseFloat(item.z&&item.z!=="-"?item.z:item.y);
+        if(code&&!isNaN(price)&&price>0)map[code]=price;
+      }
+      if(Object.keys(map).length>0)return map;
+    }catch(e){console.log("TW proxy failed:",proxyUrl,e.message);}
+  }
+  throw new Error("all TW proxies failed");
 }
 
 // USD/TWD rate
@@ -373,8 +397,7 @@ async function refreshPrices(){
   // ── TW stocks: one batch request via TWSE ──
   setStatus("loading","更新台股中…");
   try{
-    const twCodes=twStocks.map(s=>s.ticker);
-    const priceMap=await fetchAllTWPrices(twCodes);
+    const priceMap=await fetchAllTWPrices(twStocks);
     twStocks=twStocks.map(s=>{
       const p=priceMap[s.ticker];
       if(p&&p>0){twUpdated++;return{...s,currentPrice:p};}
