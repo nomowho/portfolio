@@ -323,39 +323,11 @@ async function fetchFinnhub(symbol){
   return price;
 }
 
-// TW: TWSE official API (no CORS, JSON)
-async function fetchTWSE(stockCode){
-  // TWSE real-time quote API
-  const url=`https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_${stockCode}.tw&json=1&delay=0`;
-  const r=await fetch(url,{signal:AbortSignal.timeout(8000)});
-  if(!r.ok)throw new Error("twse "+r.status);
-  const d=await r.json();
-  const item=d?.msgArray?.[0];
-  if(!item)throw new Error("no data");
-  // z = current price, y = yesterday close
-  const price=parseFloat(item.z||item.y);
-  if(isNaN(price)||price<=0)throw new Error("bad price");
-  return price;
-}
-
-// TW fallback: TPEx (OTC stocks)
-async function fetchTPEx(stockCode){
-  const url=`https://www.tpex.org.tw/openapi/v1/tpex_mainboard_quotes?stockNo=${stockCode}`;
-  const r=await fetch(url,{signal:AbortSignal.timeout(8000)});
-  if(!r.ok)throw new Error("tpex "+r.status);
-  const d=await r.json();
-  const item=Array.isArray(d)?d[0]:null;
-  if(!item)throw new Error("no data");
-  const price=parseFloat(item.Close||item.close);
-  if(isNaN(price)||price<=0)throw new Error("bad price");
-  return price;
-}
-
-// TW: try TWSE first, then TPEx
+// TW: Finnhub with .TW suffix (e.g. 2330.TW)
 async function fetchTWPrice(stockCode){
-  try{return await fetchTWSE(stockCode);}catch{}
-  try{return await fetchTPEx(stockCode);}catch{}
-  throw new Error("TW fetch failed for "+stockCode);
+  // Finnhub supports TW stocks with .TW suffix
+  const symbol=stockCode.endsWith(".TW")?stockCode:stockCode+"TW";
+  return await fetchFinnhub(symbol);
 }
 
 // USD/TWD rate
@@ -385,28 +357,32 @@ async function refreshPrices(){
   });
 
   let twUpdated=0,twFailed=0,usUpdated=0,usFailed=0;
+  const totalCount=twStocks.length+usStocks.length;
+  let done=0;
 
-  // ── TW stocks ──
-  setStatus("loading","更新台股中…");
-  await Promise.all(twStocks.map(async(s,i)=>{
+  // ── TW stocks via Finnhub (symbol format: 0050.TW, 2330.TW) ──
+  for(let i=0;i<twStocks.length;i++){
+    const s=twStocks[i];
+    done++;
+    setStatus("loading",`更新中 ${done}/${totalCount}…`);
     try{
-      const p=await fetchTWPrice(s.ticker);
+      const p=await fetchFinnhub(s.ticker+".TW");
       twStocks[i]={...s,currentPrice:p};
       twUpdated++;
     }catch{twFailed++;}
-  }));
+    await new Promise(r=>setTimeout(r,120));
+  }
 
   // ── US stocks via Finnhub ──
-  setStatus("loading","更新美股中…");
-  // Stagger requests to avoid rate limit (60/min free tier)
   for(let i=0;i<usStocks.length;i++){
     const s=usStocks[i];
+    done++;
+    setStatus("loading",`更新中 ${done}/${totalCount}…`);
     try{
       const p=await fetchFinnhub(s.ticker);
       usStocks[i]={...s,currentPrice:p};
       usUpdated++;
     }catch{usFailed++;}
-    // Small delay to respect rate limit
     if(i<usStocks.length-1)await new Promise(r=>setTimeout(r,120));
   }
 
